@@ -3,8 +3,7 @@ import numpy as np
 from datetime import timedelta
 import parcels
 from scipy import signal
-import netCDF4
-import xarray as xr
+import h5py
 
 from .file import LagrangeParticleFile
 
@@ -56,14 +55,6 @@ class LagrangeFilter(object):
             self.window_size = window_size
         # Whether we're permitted to use uneven windows on either side
         self.uneven_window = uneven_window
-
-        # copy input file dictionaries so we can construct the output file
-        self._filenames = filenames
-        self._variables = variables
-        self._dimensions = dimensions
-        self._indices = indices
-        # sample variables without the "var_" prefix
-        self._sample_variables = sample_variables
 
         # construct the OceanParcels FieldSet to use for particle advection
         self.fieldset = parcels.FieldSet.from_netcdf(
@@ -218,50 +209,20 @@ class LagrangeFilter(object):
 
         return da_out
 
-    def create_out(self):
-        """Create a netCDF dataset to hold filtered output."""
+    def create_out(self, num_steps):
+        """Create an HDF5 dataset to hold filtered output."""
 
-        # index dictionary referring to variables in the source files
-        indices = {self._dimensions[v]: ind for v, ind in self._indices.items()}
+        ds = h5py.File(self.name + ".h5")
 
-        # the output dataset we're creating
-        ds = netCDF4.Dataset(self.name + ".nc", "w")
-
-        # create a time dimension
-        dim_time = self._dimensions["time"]
-        ds.createDimension(dim_time)
-
-        # open all input files as a single dataset
-        ds_orig = xr.merge(
-            [
-                xr.open_dataset(f)[self._variables.get(v, v)]
-                for v, f in self._filenames.items()
-            ]
-        )
-        ds_orig = ds_orig.isel(**indices).squeeze()
-
-        for v in self._sample_variables:
-            # translate if required
-            v_orig = v
-            if v in self._variables:
-                v_orig = self._variables[v]
-
-            # for each non-time dimension, create it if it doesn't already exist
-            # in the output file
-            for d in ["lat", "lon"]:
-                d = self._dimensions[d]
-                if d in ds.dimensions:
-                    continue
-
-                ds.createDimension(d, ds_orig[d].size)
-                ds.createVariable(d, ds_orig[d].dtype, dimensions=(d,))
-                ds.variables[d][:] = ds_orig[d]
-
-            # create the variable in the dataset itself
-            ds.createVariable(
-                "var_" + v,
-                "float32",
-                dimensions=(dim_time, self._dimensions["lat"], self._dimensions["lon"]),
+        for v in self.sample_variables:
+            ds.create_dataset(
+                v,
+                shape=(
+                    num_steps,
+                    self.fieldset.gridset.grids[0].ydim,
+                    self.fieldset.gridset.grids[0].xdim,
+                ),
+                dtype="float32",
             )
 
         return ds
@@ -283,7 +244,7 @@ class LagrangeFilter(object):
         window_right = times <= tgrid[-1] - self.window_size
         times = times[window_left & window_right]
 
-        ds = self.create_out()
+        ds = self.create_out(len(times))
 
         # do the filtering at each timestep
         for idx, time in enumerate(times):

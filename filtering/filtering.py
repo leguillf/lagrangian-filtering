@@ -126,7 +126,7 @@ class LagrangeFilter(object):
             self.fieldset, pclass=self.particleclass, lon=lon, lat=lat, time=time
         )
 
-    def filter_step(self, time_index, time):
+    def filter_step(self, time_index, time, outclass=LagrangeParticleFile):
         """Perform forward-backward advection at a single timestep."""
 
         # seed all particles at gridpoints
@@ -137,7 +137,7 @@ class LagrangeFilter(object):
 
         # set up the temporary output file for the initial condition and
         # forward advection
-        outfile = LagrangeParticleFile(ps, self.output_dt, self.sample_variables)
+        outfile = outclass(ps, self.output_dt, self.sample_variables)
 
         # now the forward advection kernel can run
         outfile.set_group("forward")

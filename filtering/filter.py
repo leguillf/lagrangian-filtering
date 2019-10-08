@@ -7,6 +7,7 @@ latitude or even arbitrary conditions like vorticity.
 """
 
 import dask.array as da
+import numpy as np
 from scipy import signal
 
 
@@ -24,7 +25,18 @@ class Filter(object):
     """
 
     def __init__(self, frequency, fs):
-        self._filter = signal.butter(4, frequency, "highpass", fs=fs)
+        self._filter = Filter.create_filter(frequency, fs)
+
+    @staticmethod
+    def create_filter(frequency, fs):
+        """Create a filter.
+
+        This creates an analogue Butterworth filter with the given
+        frequency and sampling parameters.
+
+        """
+
+        return signal.butter(4, frequency, "highpass", fs=fs)
 
     def apply_filter(self, data, time_index):
         """Apply the filter to an array of data.
@@ -50,6 +62,60 @@ class Filter(object):
         filtered = da.apply_gufunc(
             filter_select,
             "(i)->()",
+            data,
+            axis=0,
+            output_dtypes=data.dtype,
+            allow_rechunk=True,
+        )
+
+        return filtered.compute()
+
+
+class SpatialFilter(Filter):
+    """A filter with a programmable, variable frequency.
+
+    Example:
+        A Coriolis parameter-dependent filter:
+
+            Ω = 7.2921e-5
+            f = lambda lon, lat: 2*Ω*np.sin(np.deg2rad(lat))
+            filt = SpatialFilter(f, fs, fieldset)
+
+    Args:
+        frequency_func: A function taking ``lon`` and ``lat`` args, returning
+            the inertial cutoff frequency at that location.
+        fs (float): The sampling frequency of the data over which the
+            filter is applied.
+        fieldset (:obj:`parcels.FieldSet`): An initialised
+            ``FieldSet`` with loaded grid information that can be passed
+            to ``frequency_func``.
+
+    """
+
+    def __init__(self, frequency_func, fs, lon, lat):
+        # if lon and lat are 1d, broadcast them together
+        if lon.ndim == 1 and lat.ndim == 1:
+            lon, lat = np.meshgrid(lon, lat)
+        elif lon.ndim != lat.ndim:
+            raise Exception("grid dimensions don't match")
+
+        self._filter = np.array(
+            [
+                Filter.create_filter(frequency_func(*coord), fs)
+                for coord in zip(lon, lat)
+            ]
+        )
+
+    def apply_filter(self, data, time_index):
+        """Apply the filter to an array of data."""
+
+        def filter_select(filt, x):
+            return signal.filtfilt(*filt, x)[..., time_index]
+
+        filtered = da.apply_gufunc(
+            filter_select,
+            "()->(i)->()",
+            self._filter,
             data,
             axis=0,
             output_dtypes=data.dtype,

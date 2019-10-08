@@ -313,3 +313,17 @@ def test_absolute_times():
     )
 
     assert np.all(f._window_times(d["time"], True) == t)
+
+
+def test_spatial_filter():
+    """Test creation and application of a latitude-dependent filter."""
+
+    # construct sample times (hrs) and velocity field (m/hr)
+    U0 = 100 / 24
+    w = 1 / 6
+    nt = 37
+    _, u = velocity_series(nt, U0, w)
+
+    # construct filter
+    f = lambda lon, lat: lat * w / 2
+    filt = filtering.filter.SpatialFilter(f, 1, np.array([0]), np.array([1, 2]))

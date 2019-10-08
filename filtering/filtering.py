@@ -186,8 +186,8 @@ class LagrangeFilter(object):
         # create the filter - use a 4th order Butterworth for the moment
         # make sure to convert angular frequency back to linear for passing to the
         # filter constructor
-        fs = 1.0 / self.output_dt
-        self.inertial_filter = Filter(highpass_frequency, fs)
+        self.fs = 1.0 / self.output_dt
+        self.inertial_filter = Filter(highpass_frequency / (2 * np.pi), self.fs)
 
         # timestep for advection
         self.advection_dt = advection_dt

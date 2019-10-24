@@ -8,7 +8,7 @@ latitude or even arbitrary conditions like vorticity.
 
 import dask.array as da
 import numpy as np
-from scipy import signal
+from scipy import fftpack, signal
 
 
 class Filter(object):
@@ -123,3 +123,36 @@ class SpatialFilter(Filter):
         )
 
         return filtered.compute()
+
+
+class FrequencySpaceFilter(Filter):
+    """A filter defined and applied in frequency space.
+
+    This may be used, for example, to implement a sharp cutoff filter,
+    without the possible imprecision of representing the cutoff as a
+    time-domain sinc function.
+
+    Args:
+        frequency (float): The high-pass cutoff frequency of the filter.
+        fs (float): The sampling frequency of the daat over which the
+            filter is applied.
+
+    """
+
+    def __init__(self, frequency, fs):
+        self._frequency = frequency
+        self._spacing = 1.0 / fs
+
+    def apply_filter(self, data, time_index):
+        """Apply the filter to an array of data."""
+
+        # we can't apply FFT to time-chunked data
+        if isinstance(data, da.Array):
+            data = data.compute()
+
+        window_len = data.shape[0]
+        # step high-pass filter
+        freq_filter = fftpack.rfftfreq(window_len, self._spacing) > self._frequency
+        # forward transform
+        filtered = fftpack.rfft(data, axis=0) * freq_filter[:, None]
+        return fftpack.irfft(filtered, axis=0)[time_index, ...]

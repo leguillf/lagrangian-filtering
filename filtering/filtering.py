@@ -9,14 +9,43 @@ library.
 
 import dask.array as da
 import numpy as np
-from datetime import timedelta
+from datetime import timedelta, datetime
 from glob import iglob
 import parcels
 from scipy import signal
 import netCDF4
 import xarray as xr
-
+import netCDF4 as nc
+import sys
 from .file import LagrangeParticleFile
+
+import multiprocessing as mp
+from functools import partial
+
+import pathos.pools as pp
+
+def _pickle_method(method):
+ 	func_name = method.im_func.__name__
+ 	obj = method.im_self
+ 	cls = method.im_class
+ 	if func_name.startswith('__') and not func_name.endswith('__'): #deal with mangled names
+         cls_name = cls.__name__.lstrip('_')
+         func_name = '_' + cls_name + func_name
+ 	return _unpickle_method, (func_name, obj, cls)
+
+def _unpickle_method(func_name, obj, cls):
+ 	for cls in cls.__mro__:
+         try:
+             func = cls.__dict__[func_name]
+         except KeyError:
+             pass
+         else:
+             break
+ 	return func.__get__(obj, cls)
+
+import copyreg
+import types
+copyreg.pickle(types.MethodType, _pickle_method, _unpickle_method)
 
 
 class LagrangeFilter(object):
@@ -568,7 +597,7 @@ class LagrangeFilter(object):
 
         self(*args, **kwargs)
 
-    def create_out(self, clobber=False):
+    def create_out(self, clobber=False, date=None):
         """Create a netCDF dataset to hold filtered output.
 
         Here we create a new ``netCDF4.Dataset`` for filtered
@@ -583,7 +612,13 @@ class LagrangeFilter(object):
         """
 
         # the output dataset we're creating
-        ds = netCDF4.Dataset(self.name + ".nc", "w", clobber=clobber)
+        filename = self.name 
+        if date is not None:
+            date_str = str(date)[:13]
+            filename += '_' + date_str 
+        filename += ".nc"
+        print(filename)
+        ds = netCDF4.Dataset(filename, "w", clobber=clobber)
 
         # helper function to create the dimensions in the ouput file
         def create_dimension(dims, dim, var):
@@ -629,9 +664,25 @@ class LagrangeFilter(object):
         if "time" in self._dimensions:
             dim_time = self._dimensions["time"]
             ds.createDimension(dim_time)
+            # Add by FlG
+            if date is not None:               
+                ds.createVariable(
+                "time",
+                "float32",
+                dimensions=(dim_time,),
+                )
+                calendar = 'standard'
+                units = 'seconds since 1900-01-01 00:00'
+                ts = (date - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's')
+                dt = datetime.utcfromtimestamp(ts)
+                ds["time"][:] = nc.date2num(dt, units=units, calendar=calendar)
+                
+                           
         else:
             dim_time = None
 
+        
+            
         for v in self._sample_variables:
             # translate if required (parcels -> file convention)
             v_orig = self._variables.get(v, v)
@@ -695,10 +746,12 @@ class LagrangeFilter(object):
                 "float32",
                 dimensions=(out_dims["time"], out_dims["lat"], out_dims["lon"]),
             )
+            
 
         return ds
 
     def _window_times(self, times, absolute):
+        
         """Restrict an array of times to those which have an adequate window,
         optionally converting from absolute to relative first.
 
@@ -717,6 +770,25 @@ class LagrangeFilter(object):
         window_right = times <= tgrid[-1] - self.window_size
         return times[window_left & window_right]
 
+    def _do_filtering(self, params):
+
+        idx, time,  = params
+    
+        date = self.fieldset.gridset.grids[0].time_origin.fulltime(time)
+        
+        print(date)
+        
+        ds = self.create_out(clobber=True, date=date)
+        
+        # returns a dictionary of sample_variable -> dask array
+        filtered = self.filter_step(self.advection_step(time))
+        for v, a in filtered.items():
+            ds[v][idx, ...] = a 
+            
+        ds.close()
+        
+
+
     def __call__(self, times=None, absolute=False, clobber=False):
         """Run the filtering process on this experiment."""
 
@@ -727,17 +799,29 @@ class LagrangeFilter(object):
         # or use the full range of times covered by window
         times = self._window_times(times, absolute)
 
-        ds = self.create_out(clobber=clobber)
-
-        # do the filtering at each timestep
-        for idx, time in enumerate(times):
-            # returns a dictionary of sample_variable -> dask array
-            filtered = self.filter_step(self.advection_step(time))
-            for v, a in filtered.items():
-                ds[v][idx, ...] = a
-
-        ds.close()
-
+        if len(times)==1:
+            print('Only one timestamp')
+            self._do_filtering([0,times[0]])
+        
+        else:
+            print('run parallel')
+            run_parallel(self,times)
+        
+            #run_parallel(self,times)
+        
+        print('End of the program')
+        
+def run_parallel(my_class,times,number_processes=4):
+    
+    NT = len(times)
+    params = list(enumerate(times))
+    print(params)
+    
+    p = pp.ProcessPool(number_processes)
+    
+    p.map(LagrangeFilter._do_filtering, [my_class]*NT, params)
+    
+    
 
 def ParticleFactory(variables, name="SamplingParticle", BaseClass=parcels.JITParticle):
     """Create a Particle class that samples the specified variables.

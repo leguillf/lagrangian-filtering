@@ -746,10 +746,8 @@ class LagrangeFilter(object):
         window_right = times <= tgrid[-1] - self.window_size
         return times[window_left & window_right]
 
-    def _do_filtering(self, params):
+    def _do_filtering(self, time):
 
-        idx, time,  = params
-    
         date = self.fieldset.gridset.grids[0].time_origin.fulltime(time)
         
         print(date)
@@ -759,7 +757,7 @@ class LagrangeFilter(object):
         # returns a dictionary of sample_variable -> dask array
         filtered = self.filter_step(self.advection_step(time))
         for v, a in filtered.items():
-            ds[v][idx, ...] = a 
+            ds[v][0, ...] = a 
             
         ds.close()
         
@@ -775,9 +773,9 @@ class LagrangeFilter(object):
         # or use the full range of times covered by window
         times = self._window_times(times, absolute)
 
-        for idx,time in enumerate(times):
-            self._do_filtering([idx,time])
-            
+        for time in times:
+            self._do_filtering(time)
+
         print('End of the program')
         
 

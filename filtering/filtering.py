@@ -186,13 +186,14 @@ class LagrangeFilter(object):
         # guess the output timestep
         times = self.fieldset.gridset.grids[0].time
         self.output_dt = times[1] - times[0]
+        print('timestep =',self.output_dt,'seconds')
 
         # create the filter - use a 4th order Butterworth for the moment
         # make sure to convert angular frequency back to linear for passing to the
         # filter constructor
         fs = 1.0 / self.output_dt
         self.inertial_filter = signal.butter(
-            4, highpass_frequency / (2 * np.pi), "highpass", fs=fs
+            4, highpass_frequency / (2 * np.pi), "lowpass", fs=fs
         )
 
         # timestep for advection
